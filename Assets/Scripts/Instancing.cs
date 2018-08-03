@@ -10,8 +10,10 @@ public class Instancing : MonoBehaviour
     public Animator animator = null;
     public Transform Pose;
     public GameObject prototype;
-    
-    
+
+    private Transform[] allTransforms;
+
+    public int bonePerVertex = 4;
     /*
     public class InstanceAnimationInfo 
     {
@@ -39,6 +41,11 @@ public class Instancing : MonoBehaviour
         public Matrix4x4[] extraBindPose;
     }
     */
+    
+    /*
+     * Start Animation, In Instancing Mode or Defalt Mode
+     * 
+     */
     public void InitializeAnimation()
     {
         if (prototype == null)
@@ -46,11 +53,19 @@ public class Instancing : MonoBehaviour
             Debug.LogError("The prototype is NULL. Please select the prototype first.");
         }
         Debug.Assert(prototype != null);
+        //防止误改？
         GameObject thisPrefab = prototype;
         List<Matrix4x4> bindPose = new List<Matrix4x4>(150);
         //bindPose information can be achieve from any lodInfo.skinnedMeshRenderer
         Transform[] bones = RuntimeHelper.MergeBone(lodInfo[0].skinnedMeshRenderer, bindPose);
-
+        //Not all the bones in texture are used in MergeBone, so the output bones is a subcollection.
+        //TODO: The BoneName should be save in BoneTexture in order to satisfy the order of bones.
+        allTransforms = bones;
+        InstancingMgr.Instance.AddMeshVertex(prototype.name,
+            lodInfo,
+            allTransforms,
+            bindPose,
+            bonePerVertex);
     }
 
     public class LodInfo
@@ -68,6 +83,7 @@ public class Instancing : MonoBehaviour
      * In Fn Start, we do
      * 1. If the Obj has an Animator, then disable it.
      * 2. Import meshes of the Obj into LodInfo[]. (defautly in LodInfo[0])
+     * 3. Add this obj to the InstancingMgr.
      */
     void Start()
     {
@@ -78,7 +94,11 @@ public class Instancing : MonoBehaviour
         {
             animator.enabled = false;
         }
-
+        
+        /*
+         * Setup MeshInfo into LodInfo[]
+         * if the Prefab only has Lod0 mesh
+         */
         if (lod != null)
         {
             //if an Obj already has lodlevel model, then import it.
