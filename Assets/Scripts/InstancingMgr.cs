@@ -86,7 +86,10 @@ public class InstancingMgr : Singleton<InstancingMgr>
     private void OnEnable()
     {
         UseInstancing = true;
+        vertexCachePool = new Dictionary<int, VertexCache>();
+        instanceDataPool = new Dictionary<int, InstanceData>();
     }
+    
 
     public void AddInstance(GameObject obj)
     {
