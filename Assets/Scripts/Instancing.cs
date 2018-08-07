@@ -12,36 +12,51 @@ public class Instancing : MonoBehaviour
     public GameObject prototype;
 
     private Transform[] allTransforms;
-
-    public int bonePerVertex = 4;
-    /*
-    public class InstanceAnimationInfo 
-    {
-          public List<AnimationInfo> listAniInfo;
-          public ExtraBoneInfo extraBoneInfo;
-    }
-    public class AnimationInfo
-    {
-        public string animationName;
-        public int animationNameHash;
-        public int totalFrame;
-        public int fps;
-        public int animationIndex;
-        public int textureIndex;
-        public bool rootMotion;
-        public WrapMode wrapMode;
-        public Vector3[] velocity;
-        public Vector3[] angularVelocity;
-        public List<AnimationEvent> eventList; 
-    }
-
-    public class ExtraBoneInfo
-    {
-        public string[] extraBone;
-        public Matrix4x4[] extraBindPose;
-    }
-    */
     
+    public Transform worldTransform;
+    
+    public float playSpeed = 1.0f;
+    float speedParameter = 1.0f, cacheParameter = 1.0f;
+    WrapMode wrapMode;
+
+    public WrapMode Mode
+    {
+        get { return wrapMode; }
+        set { wrapMode = value; }
+    }
+
+    public bool IsLoop()
+    {
+        return Mode == WrapMode.Loop;
+    }
+
+    public bool IsPlay()
+    {
+        return speedParameter != 0;
+    }
+
+    public bool IsPause()
+    {
+        return speedParameter == 0.0f;
+    }
+
+    [Range(1, 4)] public int bonePerVertex = 4;
+    [NonSerialized] public float curFrame;
+    [NonSerialized] public float preAniFrame;
+    [NonSerialized] public int aniIndex = -1;
+    [NonSerialized] public int preAniIndex = -1;
+    [NonSerialized] public int aniTextureIndex = -1;
+    int preAniTextureIndex = -1;
+    float transitionDuration = 0.0f;
+    bool isInTransition = false;
+    float transitionTimer = 0.0f;
+
+    [NonSerialized] public float transitionProgress = 0.0f;
+
+    //[NonSerialized]
+    //public int packageIndex;
+    static int aniInfoCount = 1;
+
     /*
      * Start Animation, In Instancing Mode or Defalt Mode
      * 
@@ -52,6 +67,7 @@ public class Instancing : MonoBehaviour
         {
             Debug.LogError("The prototype is NULL. Please select the prototype first.");
         }
+
         Debug.Assert(prototype != null);
         //防止误改？
         GameObject thisPrefab = prototype;
@@ -61,11 +77,52 @@ public class Instancing : MonoBehaviour
         //Not all the bones in texture are used in MergeBone, so the output bones is a subcollection.
         //TODO: The BoneName should be save in BoneTexture in order to satisfy the order of bones.
         allTransforms = bones;
+        List<string> BoneNameIndex = InstancingMgr.Instance.BoneNameIndex;
+        List<int> BoneIndex = new List<int>();
+        for (int i = 0; i < bones.Length; ++i)
+        {
+            BoneIndex.Add(BoneNameIndex.FindIndex((predicate) =>
+            {
+                return bones[i].name == predicate;
+            }));
+        }
         InstancingMgr.Instance.AddMeshVertex(prototype.name,
             lodInfo,
             allTransforms,
             bindPose,
             bonePerVertex);
+
+        Destroy(GetComponent<Animator>()); //启用instancing就把Animator销毁。
+        PlayAnimation(0);
+    }
+
+    public void PlayAnimation(int animationIndex)
+    {
+        transitionDuration = 0.0f;
+        transitionProgress = 1.0f;
+        isInTransition = false;
+        Debug.Assert(animationIndex < aniInfoCount);
+        if (0 <= animationIndex && animationIndex < aniInfoCount)
+        {
+            preAniIndex = aniIndex;
+            aniIndex = animationIndex;
+            preAniFrame = (float) (int) (curFrame + 0.5f);
+            curFrame = 0.0f;
+            preAniTextureIndex = aniTextureIndex;
+            //aniTextureIndex = aniInfo[aniIndex].textureIndex;
+            //wrapMode = aniInfo[aniIndex].wrapMode;
+            //因为从3dsmax中得到的BoneTexture为单clip，所以这里的aniInfoCount为1，wrapMode不停循环。
+            aniTextureIndex = 0;
+            wrapMode = Mode;
+            speedParameter = 1.0f;
+        }
+        else
+        {
+            Debug.LogWarning("The requested animation index is out of the count.");
+            return;
+        }
+
+        //RefreshAttachmentAnimation(animationIndex);
     }
 
     public class LodInfo
@@ -78,7 +135,7 @@ public class Instancing : MonoBehaviour
     }
 
     public LodInfo[] lodInfo;
-    
+
     /*
      * In Fn Start, we do
      * 1. If the Obj has an Animator, then disable it.
@@ -90,11 +147,12 @@ public class Instancing : MonoBehaviour
         LODGroup lod = GetComponent<LODGroup>();
         animator = GetComponent<Animator>();
         Pose = GetComponent<Transform>();
+        worldTransform = GetComponent<Transform>();
         if (InstancingMgr.Instance.UseInstancing && animator != null)
         {
             animator.enabled = false;
         }
-        
+
         /*
          * Setup MeshInfo into LodInfo[]
          * if the Prefab only has Lod0 mesh
@@ -159,6 +217,11 @@ public class Instancing : MonoBehaviour
                 info.skinnedMeshRenderer[j].enabled = false;
             }
         }
+
         InstancingMgr.Instance.AddInstance(gameObject);
+    }
+
+    public void UpdateAnimation()
+    {
     }
 }

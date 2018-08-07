@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class InstancingMgr : Singleton<InstancingMgr>
 {
@@ -51,6 +52,18 @@ public class InstancingMgr : Singleton<InstancingMgr>
         public List<InstancingPackage>[] packageList;
     }
 
+    private List<string> boneNameIndex;
+    public List<string> BoneNameIndex
+    {
+        get { return boneNameIndex; }
+    }
+
+    private List<int> boneIndexMap;
+    public List<int> BoneIndexMap
+    {
+        get { return boneIndexMap; }
+        set { boneIndexMap = value; }
+    }
 
     private bool _useInstancing = true;
 
@@ -75,21 +88,35 @@ public class InstancingMgr : Singleton<InstancingMgr>
     private List<BoneTextureInfo> _boneTextrueInfo = new List<BoneTextureInfo>();
     private List<Instancing> _InstancingData = new List<Instancing>();
 
+    private Transform cameraTransform;
+
     const int InstancingSizePerPackage = 200;
     int instancingPackageSize = InstancingSizePerPackage;
+
     public int InstancingPackageSize
     {
         get { return instancingPackageSize; }
         set { instancingPackageSize = value; }
     }
-    
+
+    public GameObject CreateInstance(GameObject prefab)
+    {
+        Debug.Assert(prefab != null);
+        GameObject obj = Instantiate(prefab, Vector3.zero, Quaternion.identity);
+        Instancing script = obj.GetComponent<Instancing>();
+        //AnimationInstancing prototypeScript = prefab.GetComponent<AnimationInstancing>();
+        script.prototype = prefab;
+        return obj;
+    }
+
     private void OnEnable()
     {
         UseInstancing = true;
+        cameraTransform = Camera.main.transform;
         vertexCachePool = new Dictionary<int, VertexCache>();
         instanceDataPool = new Dictionary<int, InstanceData>();
     }
-    
+
 
     public void AddInstance(GameObject obj)
     {
@@ -115,17 +142,172 @@ public class InstancingMgr : Singleton<InstancingMgr>
     void Update()
     {
         generateBoneMatrixData();
-        render();
+        Render();
     }
 
     private void generateBoneMatrixData()
     {
-        //TODO
+        Vector3 cameraPosition = cameraTransform.position;
+        for (int i = 0; i != _InstancingData.Count; ++i) //对列表中每个对象做Instancing。
+        {
+            Instancing instance = _InstancingData[i];
+            //if (!instance.IsPlaying())
+            //    continue;
+            //if (instance.aniIndex < 0 && instance.parentInstance == null)
+            //    continue;
+
+            instance.UpdateAnimation();
+
+            //if (!instance.visible)
+            //    continue;
+
+            //here only one Lod
+            //instance.UpdateLod(cameraPosition);
+
+            //Instancing.LodInfo lod = instance.lodInfo[instance.lodLevel];
+            Instancing.LodInfo lod = instance.lodInfo[0];
+
+            int aniTextureIndex = -1;
+            //if (instance.parentInstance != null)
+            //    aniTextureIndex = instance.parentInstance.aniTextureIndex;
+            //else
+            aniTextureIndex = instance.aniTextureIndex;
+
+            for (int j = 0; j != lod.vertexCacheList.Length; ++j)
+            {
+                VertexCache cache = lod.vertexCacheList[j] as VertexCache;
+                int packageIndex = cache.runtimePackageIndex[aniTextureIndex];
+                Debug.Assert(packageIndex < cache.packageList[aniTextureIndex].Count);
+                VertexCache.InstancingPackage package = cache.packageList[aniTextureIndex][packageIndex];
+                if (package.instancingCount + 1 > instancingPackageSize)
+                {
+                    ++cache.runtimePackageIndex[aniTextureIndex];
+                    packageIndex = cache.runtimePackageIndex[aniTextureIndex];
+                    if (packageIndex >= cache.packageList[aniTextureIndex].Count)
+                    {
+                        VertexCache.InstancingPackage newPackage = CreatePackage(cache.instanceData,
+                            cache.mesh,
+                            cache.materials,
+                            aniTextureIndex);
+                        cache.packageList[aniTextureIndex].Add(newPackage);
+                        PreparePackageMaterial(newPackage, cache, aniTextureIndex);
+                        newPackage.instancingCount = 1;
+                    }
+                }
+                else
+                    ++package.instancingCount;
+            }
+
+            VertexCache vertexCache = lod.vertexCacheList[0];
+            InstanceData data = vertexCache.instanceData;
+
+            int index = vertexCache.runtimePackageIndex[aniTextureIndex];
+            VertexCache.InstancingPackage pkg = vertexCache.packageList[aniTextureIndex][index];
+            int count = pkg.instancingCount - 1;
+            if (count >= 0)
+            {
+                Matrix4x4 worldMat = instance.worldTransform.localToWorldMatrix;
+                Matrix4x4[] arrayMat = data.WorldMatrix[aniTextureIndex][index];
+                arrayMat[count].m00 = worldMat.m00;
+                arrayMat[count].m01 = worldMat.m01;
+                arrayMat[count].m02 = worldMat.m02;
+                arrayMat[count].m03 = worldMat.m03;
+                arrayMat[count].m10 = worldMat.m10;
+                arrayMat[count].m11 = worldMat.m11;
+                arrayMat[count].m12 = worldMat.m12;
+                arrayMat[count].m13 = worldMat.m13;
+                arrayMat[count].m20 = worldMat.m20;
+                arrayMat[count].m21 = worldMat.m21;
+                arrayMat[count].m22 = worldMat.m22;
+                arrayMat[count].m23 = worldMat.m23;
+                arrayMat[count].m30 = worldMat.m30;
+                arrayMat[count].m31 = worldMat.m31;
+                arrayMat[count].m32 = worldMat.m32;
+                arrayMat[count].m33 = worldMat.m33;
+                float frameIndex = 0, preFrameIndex = -1;
+                //if (instance.parentInstance != null)
+                //{
+                //    frameIndex = instance.parentInstance.aniInfo[instance.parentInstance.aniIndex].animationIndex +
+                //                 instance.parentInstance.curFrame;
+                //    if (instance.parentInstance.preAniIndex >= 0)
+                //        preFrameIndex =
+                //            instance.parentInstance.aniInfo[instance.parentInstance.preAniIndex].animationIndex +
+                //            instance.parentInstance.preAniFrame;
+                //}
+                //else
+                //{
+                //frameIndex = instance.aniInfo[instance.aniIndex].animationIndex + instance.curFrame;
+                //if (instance.preAniIndex >= 0)
+                //    preFrameIndex = instance.aniInfo[instance.preAniIndex].animationIndex + instance.preAniFrame;
+                frameIndex = instance.curFrame;
+                if (instance.preAniIndex >= 0)
+                    preFrameIndex = instance.preAniFrame;
+                //}
+
+                data.FrameIndex[aniTextureIndex][index][count] = frameIndex;
+                data.PreFrameIndex[aniTextureIndex][index][count] = preFrameIndex;
+                data.TransitionProgress[aniTextureIndex][index][count] = instance.transitionProgress;
+            }
+        }
     }
 
-    private void render()
+    private void Render()
     {
-        //TODO
+        foreach (var obj in vertexCachePool)
+        {
+            VertexCache vertexCache = obj.Value;
+            for (int k = 0; k != vertexCache.packageList.Length; ++k)
+            {
+                for (int i = 0; i != vertexCache.packageList[k].Count; ++i)
+                {
+                    VertexCache.InstancingPackage package = vertexCache.packageList[k][i];
+                    if (package.instancingCount == 0)
+                        continue;
+                    for (int j = 0; j != package.subMeshCount; ++j)
+                    {
+                        if (UseInstancing)
+                        {
+#if UNITY_EDITOR
+                            PreparePackageMaterial(package, vertexCache, k);
+#endif
+                            package.propertyBlock.SetFloatArray("frameIndex",
+                                vertexCache.instanceData.FrameIndex[k][i]);
+                            package.propertyBlock.SetFloatArray("preFrameIndex",
+                                vertexCache.instanceData.PreFrameIndex[k][i]);
+                            package.propertyBlock.SetFloatArray("transitionProgress",
+                                vertexCache.instanceData.TransitionProgress[k][i]);
+                            Graphics.DrawMeshInstanced(vertexCache.mesh,
+                                j,
+                                package.material[j],
+                                vertexCache.instanceData.WorldMatrix[k][i],
+                                package.instancingCount,
+                                package.propertyBlock,
+                                ShadowCastingMode.On,
+                                true,
+                                0);
+                        }
+                        else
+                        {
+                            package.material[j].SetFloat("frameIndex", vertexCache.instanceData.FrameIndex[k][i][0]);
+                            package.material[j].SetFloat("preFrameIndex",
+                                vertexCache.instanceData.PreFrameIndex[k][i][0]);
+                            package.material[j].SetFloat("transitionProgress",
+                                vertexCache.instanceData.TransitionProgress[k][i][0]);
+                            Graphics.DrawMesh(vertexCache.mesh,
+                                vertexCache.instanceData.WorldMatrix[k][i][0],
+                                package.material[j],
+                                0,
+                                null,
+                                j);
+                        }
+                    }
+
+                    package.instancingCount = 0;
+                }
+
+                vertexCache.runtimePackageIndex[k] = 0;
+            }
+        }
     }
 
     public void clear()
@@ -140,6 +322,23 @@ public class InstancingMgr : Singleton<InstancingMgr>
         int count = reader.ReadInt32();
         int blockWidth = reader.ReadInt32();
         int blockHeight = reader.ReadInt32();
+        //byte[] input = new byte[100];
+        //input = reader.ReadBytes(100);
+        int nameLength;
+        char character;
+        boneNameIndex = new List<string>();
+        for (int i = 0; i != blockHeight; ++i)
+        {
+            string boneName = "";
+            nameLength = reader.ReadByte();
+            for (int j = 0; j != nameLength; ++j)
+            {
+                character = reader.ReadChar();
+                boneName = boneName + character;
+            }
+            boneNameIndex.Add(boneName);
+            nameLength = reader.ReadByte();
+        }
         BoneTextureInfo aniTexture = new BoneTextureInfo();
         aniTexture.BoneTexture = new Texture2D[count];
         aniTexture.Name = prefebName;
@@ -208,9 +407,10 @@ public class InstancingMgr : Singleton<InstancingMgr>
 
                 //if not, create a vertexCache and add it to the pool.
 
-                VertexCache vertexCache = CreateVertexCache(prefabName, nameCode, 0, m);
-                vertexCache.bindPose = bindPose.ToArray();//刚刚得到的该prefab的所有sharedmesh所用到的bone的bindpose都存进去。
-                lod.vertexCacheList[i] = vertexCache;//与MeshRender数一一对应。
+                VertexCache
+                    vertexCache = CreateVertexCache(prefabName, nameCode, 0, m); //仅仅是创建，包括PackageList、InstanceData都还为空。
+                vertexCache.bindPose = bindPose.ToArray(); //刚刚得到的该prefab的所有sharedmesh所用到的bone的bindpose都存进去。
+                lod.vertexCacheList[i] = vertexCache; //与MeshRender数一一对应。
                 SetupVertexCache(vertexCache, lod.skinnedMeshRenderer[i], bones, bonePerVertex);
             }
 
@@ -263,15 +463,19 @@ public class InstancingMgr : Singleton<InstancingMgr>
         vertexCachePool[cacheName] = vertexCache;
         vertexCache.nameCode = cacheName;
         vertexCache.mesh = mesh;
-        vertexCache.boneTextureIndex = FindTexture_internal(prefabName);
+        vertexCache.boneTextureIndex =
+            FindTexture_internal(
+                prefabName); //因为Texture不是从AnimationInfo读进来的，而是作为BoneInfo读入，所以需要在这里通过prefabName将boneTexture和vertexCache连起来。
         vertexCache.weight = new Vector4[mesh.vertexCount];
         vertexCache.boneIndex = new Vector4[mesh.vertexCount];
         int packageCount = 1;
-        if (vertexCache.boneTextureIndex >= 0)
+        if (vertexCache.boneTextureIndex >= 0) //如果找到了boneTexture，那么packageCount装载为该prefab的BoneTexture数。
         {
             BoneTextureInfo texture = _boneTextrueInfo[vertexCache.boneTextureIndex];
             packageCount = texture.BoneTexture.Length;
         }
+
+        //建立了packageList，也是空的。
 
         vertexCache.packageList = new List<VertexCache.InstancingPackage>[packageCount];
         for (int i = 0; i != vertexCache.packageList.Length; ++i)
@@ -283,6 +487,8 @@ public class InstancingMgr : Singleton<InstancingMgr>
 
         InstanceData data = null;
         int instanceName = prefabName.GetHashCode() + alias;
+
+        //这里往instanceDataPool里面加入了一个空的data，只有Instancename。,并且创建只进行到List<float[]>[]的List层次，往List里面注入float[]在CreatPackage里面完成。
         if (!instanceDataPool.TryGetValue(instanceName, out data))
         {
             data = new InstanceData();
@@ -415,6 +621,7 @@ public class InstancingMgr : Singleton<InstancingMgr>
         }
     }
 
+    //SetupVertexCache(vertexCache, lod.meshRenderer[i], m, bones, bonePerVertex);
     private void SetupVertexCache(VertexCache vertexCache,
         MeshRenderer render,
         Mesh mesh,
@@ -426,6 +633,7 @@ public class InstancingMgr : Singleton<InstancingMgr>
         {
             for (int k = 0; k != boneTransform.Length; ++k)
             {
+                //找到vertexCache对应render的parent在boneTransform中的对应序号。
                 if (render.transform.parent.name.GetHashCode() == boneTransform[k].name.GetHashCode())
                 {
                     boneIndex = k;
@@ -441,7 +649,8 @@ public class InstancingMgr : Singleton<InstancingMgr>
 
 
         if (vertexCache.materials == null)
-            vertexCache.materials = render.sharedMaterials;
+            vertexCache.materials =
+                render.sharedMaterials; //材质从render.sharedMaterials里面获得，来自于prefab的materials，故需要在prefab中就对Materials更改为InstacingShader。
 
         SetupAdditionalData(vertexCache);
         for (int i = 0; i != vertexCache.packageList.Length; ++i)
@@ -452,7 +661,7 @@ public class InstancingMgr : Singleton<InstancingMgr>
             PreparePackageMaterial(package, vertexCache, i);
         }
     }
-    
+
     public void BindAttachment(VertexCache cache, Mesh sharedMesh, int boneIndex)
     {
         Matrix4x4 mat = cache.bindPose[boneIndex].inverse;
@@ -465,6 +674,7 @@ public class InstancingMgr : Singleton<InstancingMgr>
             vertices[k] = q * vertices[k];
             vertices[k] = vertices[k] + offset;
         }
+
         cache.mesh.vertices = vertices;
 
         for (int j = 0; j != cache.mesh.vertexCount; ++j)
@@ -476,10 +686,10 @@ public class InstancingMgr : Singleton<InstancingMgr>
             cache.boneIndex[j].x = boneIndex;
         }
     }
-    
+
     public void SetupAdditionalData(VertexCache vertexCache)
     {
-        Color[] colors = new Color[vertexCache.weight.Length];            
+        Color[] colors = new Color[vertexCache.weight.Length];
         for (int i = 0; i != colors.Length; ++i)
         {
             colors[i].r = vertexCache.weight[i].x;
@@ -487,6 +697,7 @@ public class InstancingMgr : Singleton<InstancingMgr>
             colors[i].b = vertexCache.weight[i].z;
             colors[i].a = vertexCache.weight[i].w;
         }
+
         vertexCache.mesh.colors = colors;
 
         List<Vector4> uv2 = new List<Vector4>(vertexCache.boneIndex.Length);
@@ -494,15 +705,18 @@ public class InstancingMgr : Singleton<InstancingMgr>
         {
             uv2.Add(vertexCache.boneIndex[i]);
         }
+
         vertexCache.mesh.SetUVs(2, uv2);
         vertexCache.mesh.UploadMeshData(false);
     }
-    
-    public void PreparePackageMaterial(VertexCache.InstancingPackage package, VertexCache vertexCache, int aniTextureIndex)
+
+    //给shader传入参数？
+    public void PreparePackageMaterial(VertexCache.InstancingPackage package, VertexCache vertexCache,
+        int aniTextureIndex)
     {
         if (vertexCache.boneTextureIndex < 0)
             return;
-                
+
         for (int i = 0; i != package.subMeshCount; ++i)
         {
             BoneTextureInfo texture = _boneTextrueInfo[vertexCache.boneTextureIndex];
@@ -514,7 +728,26 @@ public class InstancingMgr : Singleton<InstancingMgr>
         }
     }
 
-    public VertexCache.InstancingPackage CreatePackage(InstanceData data, Mesh mesh, Material[] originalMaterial, int index)
+    /*
+    public class InstanceData
+    {
+        public List<Matrix4x4[]>[] WorldMatrix;
+        public List<float[]>[] FrameIndex;
+        public List<float[]>[] PreFrameIndex;
+        public List<float[]>[] TransitionProgress;
+    }
+    public class InstancingPackage
+    {
+        public Material[] material;
+        public int animationTextureIndex = 0;
+        public int subMeshCount = 1;
+        public int instancingCount;
+        public int size;
+        public MaterialPropertyBlock propertyBlock;
+    }
+    */
+    public VertexCache.InstancingPackage CreatePackage(InstanceData data, Mesh mesh, Material[] originalMaterial,
+        int index)
     {
         VertexCache.InstancingPackage package = new VertexCache.InstancingPackage();
         package.material = new Material[mesh.subMeshCount];
@@ -522,17 +755,17 @@ public class InstancingMgr : Singleton<InstancingMgr>
         package.size = 1;
         for (int i = 0; i != mesh.subMeshCount; ++i)
         {
-                package.material[i] = new Material(originalMaterial[i]);
-                //package.material[i].name = "AniInstancing";
-                package.material[i].enableInstancing = UseInstancing;
-                if (UseInstancing)
-                    package.material[i].EnableKeyword("INSTANCING_ON");
-                else
-                    package.material[i].DisableKeyword("INSTANCING_ON");
+            package.material[i] = new Material(originalMaterial[i]);
+            //package.material[i].name = "AniInstancing";
+            package.material[i].enableInstancing = UseInstancing;
+            if (UseInstancing)
+                package.material[i].EnableKeyword("INSTANCING_ON");
+            else
+                package.material[i].DisableKeyword("INSTANCING_ON");
 
-                package.propertyBlock = new MaterialPropertyBlock();
-                package.material[i].EnableKeyword("USE_CONSTANT_BUFFER");
-                package.material[i].DisableKeyword("USE_COMPUTE_BUFFER");
+            package.propertyBlock = new MaterialPropertyBlock();
+            package.material[i].EnableKeyword("USE_CONSTANT_BUFFER");
+            package.material[i].DisableKeyword("USE_COMPUTE_BUFFER");
         }
 
         Matrix4x4[] mat = new Matrix4x4[instancingPackageSize];
